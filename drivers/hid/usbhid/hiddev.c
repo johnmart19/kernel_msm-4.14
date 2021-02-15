@@ -312,37 +312,9 @@ static int hiddev_open(struct inode *inode, struct file *file)
 	hiddev = hid->hiddev;
 
 	mutex_lock(&hiddev->existancelock);
-	/*
-	 * recheck exist with existance lock held to
-	 * avoid opening a disconnected device
-	 */
-	if (!list->hiddev->exist) {
-		res = -ENODEV;
-		goto bail_unlock;
-	}
-	if (!list->hiddev->open++)
-		if (list->hiddev->exist) {
-			struct hid_device *hid = hiddev->hid;
-			res = hid_hw_power(hid, PM_HINT_FULLON);
-			if (res < 0)
-				goto bail_unlock;
-			res = hid_hw_open(hid);
-			if (res < 0)
-				goto bail_normal_power;
-		}
-	mutex_unlock(&hiddev->existancelock);
-	return 0;
-bail_normal_power:
-	hid_hw_power(hid, PM_HINT_NORMAL);
-bail_unlock:
+	res = hiddev->exist ? __hiddev_open(hiddev, file) : -ENODEV;
 	mutex_unlock(&hiddev->existancelock);
 
-	spin_lock_irq(&list->hiddev->list_lock);
-	list_del(&list->node);
-	spin_unlock_irq(&list->hiddev->list_lock);
-bail:
-	file->private_data = NULL;
-	vfree(list);
 	return res;
 }
 
@@ -560,12 +532,16 @@ static noinline int hiddev_ioctl_usage(struct hiddev *hiddev, unsigned int cmd, 
 
 		switch (cmd) {
 		case HIDIOCGUSAGE:
+			if (uref->usage_index >= field->report_count)
+				goto inval;
 			uref->value = field->value[uref->usage_index];
 			if (copy_to_user(user_arg, uref, sizeof(*uref)))
 				goto fault;
 			goto goodreturn;
 
 		case HIDIOCSUSAGE:
+			if (uref->usage_index >= field->report_count)
+				goto inval;
 			field->value[uref->usage_index] = uref->value;
 			goto goodreturn;
 
